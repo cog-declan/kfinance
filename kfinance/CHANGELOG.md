@@ -1,5 +1,10 @@
 # Changelog
 
+## v8.1.0
+- Harden the local MCP server (`python -m kfinance.mcp`) SSE and streamable HTTP transports against DNS rebinding and cross-origin browser requests: requests whose `Host` or `Origin` header is not loopback, same-origin, or explicitly allowed via the new `--allowed-host` / `--allowed-origin` options are now rejected (HTTP 421 / 403). The default bind stays `127.0.0.1`.
+- Add optional inbound bearer-token auth for the local MCP SSE/HTTP transports via `--auth-token` or the `KFINANCE_MCP_AUTH_TOKEN` env var.
+- **Breaking:** the local MCP server now refuses to start on a non-loopback `FASTMCP_HOST` without an inbound auth token unless `--dangerously-allow-unauthenticated-remote-access` is passed. Clients that reach the server via a non-loopback hostname must now be listed with `--allowed-host`.
+
 ## v8.0.2
 - Reject non-string `line_item` values in `get_financial_line_item_from_identifiers` before they reach `.lower()`. A list now returns a clear "one line item per call" validation error instead of an `AttributeError` crash (KFINANCE-MCP-5D).
 
