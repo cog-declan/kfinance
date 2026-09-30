@@ -147,8 +147,16 @@ class TestInboundProtection:
 
 
 class TestRunProxyMcpCli:
-    def test_non_loopback_without_auth_refuses_to_start(self, httpx2_mock: Router) -> None:
-        no_auth_settings = Settings(auth={"refresh_token": "dummy-refresh-token"})
+    @pytest.mark.parametrize(
+        "inbound_auth_token",
+        [pytest.param(None, id="unset"), pytest.param(SecretStr(""), id="empty")],
+    )
+    def test_non_loopback_without_auth_refuses_to_start(
+        self, inbound_auth_token: SecretStr | None, httpx2_mock: Router
+    ) -> None:
+        no_auth_settings = Settings(
+            auth={"refresh_token": "dummy-refresh-token"}, inbound_auth_token=inbound_auth_token
+        )
         with (
             patch.object(proxy_mcp, "settings", no_auth_settings),
             patch.object(proxy_mcp.uvicorn, "run") as run,

@@ -124,7 +124,9 @@ def run_proxy_mcp(host: str, port: int, allow_unauthenticated_network_access: bo
     """Run the proxy MCP server."""
     check_network_exposure(
         host=host,
-        auth_enabled=settings.inbound_auth_token is not None,
+        auth_enabled=bool(
+            settings.inbound_auth_token and settings.inbound_auth_token.get_secret_value()
+        ),
         allow_unauthenticated_network_access=allow_unauthenticated_network_access,
     )
     app = create_app()
