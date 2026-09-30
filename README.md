@@ -39,7 +39,7 @@ This function initializes and starts an MCP server that exposes the kFinance too
 
 The server's full signature is as follows:
 
-`kfinance.mcp [--stdio|-s|--sse|--streamable-http] --refresh-token <refresh-token> --client-id <client-id> --private-key <private-key>`
+`kfinance.mcp [--stdio|-s|--sse|--streamable-http] --refresh-token <refresh-token> --client-id <client-id> --private-key <private-key> [--auth-token <token>] [--allowed-host <host>]... [--allowed-origin <origin>]... [--dangerously-allow-unauthenticated-remote-access]`
 
 Authentication Methods (in order of precedence):
 
@@ -52,6 +52,13 @@ Transport Layers:
 - `--stdio` / `-s`: Standard input/output transport (use with MCP Inspector)
 - `--sse`: Server-Sent Events transport (default)
 - `--streamable-http`: HTTP transport
+
+HTTP transport security (`--sse` and `--streamable-http`):
+
+- The server binds to `127.0.0.1` by default (override with the `FASTMCP_HOST` env var). Prefer `--stdio` for local single-user use.
+- Requests whose `Host` or `Origin` header is not loopback, same-origin, or explicitly allowed are rejected, which blocks DNS-rebinding attacks from web pages. Use `--allowed-host <host>` and `--allowed-origin <origin>` (repeatable) to accept additional values.
+- `--auth-token <token>` (or the `KFINANCE_MCP_AUTH_TOKEN` env var, preferred so the token does not appear in process listings) requires clients to send `Authorization: Bearer <token>`.
+- Binding to a non-loopback host requires an auth token. `--dangerously-allow-unauthenticated-remote-access` disables this check and lets anyone who can reach the server call tools with your kfinance credentials.
 
 Examples:
 ```bash
