@@ -1,9 +1,11 @@
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
+import hmac
 import logging
 import time
 from typing import Generator, Generic, TypeVar
 
+from fastmcp.server.auth import AccessToken, TokenVerifier
 import httpx2
 from jwt import decode as jwt_decode, encode
 
@@ -205,3 +207,18 @@ class DynamicBearerAuth(httpx2.Auth):
         """Inject the current Bearer token into the request Authorization header."""
         request.headers["Authorization"] = f"Bearer {self._dispenser.access_token.token}"
         yield request
+
+
+class ApiKeyTokenVerifier(TokenVerifier):
+    """Verifies inbound MCP client requests against a single pre-shared API key."""
+
+    def __init__(self, api_key: str) -> None:
+        """Initialize with the API key clients must present as a Bearer token."""
+        super().__init__()
+        self._api_key = api_key.encode()
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        """Return an AccessToken if the presented token matches the API key."""
+        if not hmac.compare_digest(token.encode(), self._api_key):
+            return None
+        return AccessToken(token=token, client_id="proxy-mcp-client", scopes=[])
