@@ -1,5 +1,6 @@
 import abc
 import json
+import re
 from typing import Annotated, Any, Callable, Coroutine, Dict, Generic, Literal, Type, TypeVar
 
 from asyncer import syncify
@@ -21,9 +22,38 @@ from kfinance.domains.companies.company_models import IdentificationTripleWithCo
 from kfinance.httpx_utils import KfinanceHttpxClient
 
 
+_MAX_ERROR_DETAIL_LENGTH = 300
+_ERROR_DETAIL_KEYS = ("detail", "message", "error")
+_CREDENTIAL_PATTERN = re.compile(
+    r"(?i)\bbearer\s+\S+"  # bearer tokens
+    r"|\beyJ[\w-]+\.[\w-]+\.[\w-]*"  # JWTs
+)
+
+
 def _sanitize_http_error(e: HTTPStatusError) -> str:
-    """Return the response body from an HTTPStatusError."""
-    return f"{e.response.status_code}: {e.response.text}"
+    """Return a short, credential-free description of an HTTPStatusError.
+
+    Only a string `detail`/`message`/`error` field from a JSON body is kept. It is
+    stripped of control characters, has credential-like substrings redacted, and is
+    truncated. Other bodies (HTML error pages, stack traces, etc.) are dropped.
+    """
+    status = f"{e.response.status_code} {e.response.reason_phrase}".strip()
+    try:
+        body = e.response.json()
+    except ValueError:
+        return status
+    detail = None
+    if isinstance(body, dict):
+        detail = next(
+            (body[key] for key in _ERROR_DETAIL_KEYS if isinstance(body.get(key), str)), None
+        )
+    if not detail:
+        return status
+    detail = "".join(ch if ch.isprintable() else " " for ch in detail)
+    detail = _CREDENTIAL_PATTERN.sub("[REDACTED]", detail)
+    if len(detail) > _MAX_ERROR_DETAIL_LENGTH:
+        detail = detail[:_MAX_ERROR_DETAIL_LENGTH] + "..."
+    return f"{status}: {detail}"
 
 
 class KfinanceTool(BaseTool):
@@ -41,6 +71,20 @@ class KfinanceTool(BaseTool):
 
     model_config = ConfigDict(extra="forbid")
 
+    def ensure_permitted(self) -> None:
+        """Raise a PermissionError unless the user holds one of the tool's accepted permissions.
+
+        Called on every invocation through the non-langchain entry points (including MCP).
+        """
+        if self.accepted_permissions is None:
+            return
+        if not self.accepted_permissions.intersection(
+            self.kfinance_client.kfinance_api_client.user_permissions
+        ):
+            raise PermissionError(
+                f"The current user does not have the permissions required to use {self.name}."
+            )
+
     def run_without_langchain(self, *args: Any, **kwargs: Any) -> dict:
         """Execute a Kfinance tool without langchain (sync version).
 
@@ -51,6 +95,7 @@ class KfinanceTool(BaseTool):
 
         Note: FastMCP uses arun_without_langchain (async version) to avoid event loop conflicts.
         """
+        self.ensure_permitted()
         args_model = self.args_schema.model_validate(kwargs)
         args_dict = args_model.model_dump()
         # Only pass params included in the LLM generated kwargs.
@@ -68,6 +113,7 @@ class KfinanceTool(BaseTool):
         This is the async equivalent of run_without_langchain, designed for use
         with async frameworks like FastMCP.
         """
+        self.ensure_permitted()
         args_model = self.args_schema.model_validate(kwargs)
         args_dict = args_model.model_dump()
         # Only pass params included in the LLM generated kwargs.
@@ -84,6 +130,7 @@ class KfinanceTool(BaseTool):
         This is a wrapper around the `_arun` method that adds grounding support
         for returning the endpoint urls along with the data as citation info for the LRA Data Agent.
         """
+        self.ensure_permitted()
         with self.kfinance_client.httpx_client.endpoint_tracker() as endpoint_tracker_queue:
             args_model = self.args_schema.model_validate(kwargs)
             args_dict = args_model.model_dump()

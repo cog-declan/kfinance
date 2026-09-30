@@ -25,8 +25,14 @@ All configuration is via environment variables (powered by pydantic-settings).
 | `AUTH_OKTA_HOST` | No | `https://kensho.okta.com` | Okta host URL |
 | `AUTH_REFRESH_TOKEN` | Yes* | — | Refresh token for obtaining access tokens (local dev fallback) |
 | `AUTH_REFRESH_URL` | No | `https://kfinance.kensho.com/oauth2/refresh` | Token refresh endpoint |
+| `INBOUND_AUTH_TOKEN` | Yes** | — | Pre-shared token MCP clients must send as `Authorization: Bearer <token>` (at least 32 characters) |
+| `ALLOWED_HOSTS` | No | `[]` | JSON list of extra `Host` header values accepted on `/mcp` (e.g. `'["mcp.internal.example"]'`). Loopback hosts and the bind address are always accepted; `fnmatch` wildcards are supported |
+| `DANGEROUSLY_ALLOW_UNTRUSTED_UPSTREAM_URLS` | No | `false` | By default `BACKEND_URL`, `AUTH_OKTA_HOST` and `AUTH_REFRESH_URL` must be https URLs on `kfinance.kensho.com` or `kensho.okta.com`. Set to `true` to use other hosts; credentials are sent to them |
+| `CORS_ALLOWED_ORIGINS` | No | `[]` | JSON list of browser origins allowed by CORS and by the `/mcp` `Origin` check (e.g. `'["https://app.example"]'`) |
 
 *Either both `AUTH_CLIENT_ID` and `AUTH_PRIVATE_KEY`, or `AUTH_REFRESH_TOKEN` must be set.
+
+**Required when binding to a non-loopback host, unless `--dangerously-allow-unauthenticated-network-access` is passed.
 
 ## Authentication Methods
 
@@ -52,7 +58,7 @@ export AUTH_PRIVATE_KEY="your-private-key"
 ## Running
 
 ```bash
-python -m kfinance.proxy_mcp --host 127.0.0.1 --port 8000
+python -m kfinance.integrations.proxy_mcp.proxy_mcp --host 127.0.0.1 --port 8000
 ```
 
 The server starts on `http://127.0.0.1:8000/mcp` using streamable-http transport.
@@ -63,27 +69,28 @@ Once the server is running, you can test it with the [MCP Inspector](https://mod
 npx @modelcontextprotocol/inspector
 ```
 
-In the inspector, connect using URL `http://127.0.0.1:8000/mcp` with transport type "Streamable HTTP".
+In the inspector, connect using URL `http://127.0.0.1:8000/mcp` with transport type "Streamable HTTP". If `INBOUND_AUTH_TOKEN` is set, add an `Authorization: Bearer <token>` header.
 
 | CLI Option | Default | Description |
 |-----------|---------|-------------|
 | `--host` | `127.0.0.1` | Host to bind to |
 | `--port` | `8000` | Port to bind to |
+| `--dangerously-allow-unauthenticated-network-access` | off | Allow a non-loopback `--host` without `INBOUND_AUTH_TOKEN`. Only use behind network-level controls |
 
 ## Client Authentication
 
-This skeleton does not authenticate incoming requests from MCP clients. Any client that can reach the proxy can use it. For a production deployment, you would need to add one of the following:
+Every request the proxy forwards carries its own kfinance credentials, so anyone who can call the proxy acts as that user. The proxy therefore protects `/mcp` (`GET /health` stays public):
 
-- **OAuth 2.0 Proxy** — The proxy runs its own OAuth flow (e.g., via FastMCP's built-in `OAuthProxy`). Clients register, get redirected to an IdP like Okta, and receive scoped tokens. 
-- **JWT Validation** — Clients bring their own IdP-issued tokens. The proxy validates them against the IdP's JWKS endpoint (FastMCP provides `JWTVerifier` for this). Simpler than a full OAuth flow but requires clients to obtain tokens independently.
-- **API Key / Static Token** — The proxy checks for a pre-shared secret in request headers. Simple and appropriate for internal services or controlled partner integrations.
-- **Network-Level Trust** — No application-layer auth. The proxy is deployed behind a VPN, service mesh (e.g., Istio with mTLS), or internal load balancer so that only trusted services can reach it.
+- **Static bearer token** — Set `INBOUND_AUTH_TOKEN` (e.g. from `python -c "import secrets; print(secrets.token_urlsafe(32))"`) and have clients send `Authorization: Bearer <token>`. Requests without it get a 401.
+- **Non-loopback binds** — The proxy refuses to start on a non-loopback `--host` (e.g. `0.0.0.0`) without `INBOUND_AUTH_TOKEN`. If access is restricted at the network level instead (VPN, service mesh with mTLS, internal load balancer), pass `--dangerously-allow-unauthenticated-network-access`.
+- **Host and Origin validation** — Requests whose `Host` header is not loopback, the bind address or in `ALLOWED_HOSTS` get a 421, and browser requests from origins other than loopback, same-origin or `CORS_ALLOWED_ORIGINS` get a 403. This blocks DNS rebinding. Behind a load balancer or Kubernetes service, add the hostnames clients use to `ALLOWED_HOSTS`.
+
+A static token is shared by all clients. For per-client identities, consider replacing it with FastMCP's `JWTVerifier` (clients bring IdP-issued tokens) or `OAuthProxy`.
 
 ## Production Considerations
 
 Beyond client authentication, a production deployment would additionally need:
 
-- CORS configuration tuned to specific origins
 - A more comprehensive health check (the current `GET /health` stub does not verify backend connectivity or token validity)
 - Sentry or equivalent error tracking
 - Redis for shared OAuth client state across replicas (if using OAuth proxy)

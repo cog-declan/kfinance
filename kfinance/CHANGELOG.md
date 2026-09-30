@@ -1,5 +1,17 @@
 # Changelog
 
+## v9.0.0
+- Enforce tool permissions on every invocation, not only when tools are registered. `run_without_langchain`, `arun_without_langchain` (used by the MCP servers) and `run_with_endpoint_tracking` now raise `PermissionError` before any API request if the user does not hold one of the tool's `accepted_permissions`.
+- Add optional inbound authentication to the local and proxy MCP servers: set `KFINANCE_MCP_AUTH_TOKEN` (local, or `--auth-token`) or `INBOUND_AUTH_TOKEN` (proxy) to a secret of at least 32 characters, and clients must send it as `Authorization: Bearer <token>`.
+- **Breaking:** the MCP servers refuse to bind to a non-loopback host without inbound authentication. Pass `--dangerously-allow-unauthenticated-network-access` to opt out (for example behind a VPN or service mesh).
+- **Breaking:** the MCP servers' HTTP endpoints reject requests whose `Host` header is not loopback or the bind address (421) and browser requests from non-loopback, cross-site origins (403), to block DNS rebinding. Allow extra values with `--allowed-host`/`--allowed-origin` (local) or `ALLOWED_HOSTS`/`CORS_ALLOWED_ORIGINS` (proxy).
+- **Breaking:** the proxy MCP server no longer sends wildcard credentialed CORS headers. Allowed origins come from `CORS_ALLOWED_ORIGINS`, which defaults to empty.
+- **Breaking:** `KfinanceHttpxClient` rejects absolute URLs whose scheme, host or port differ from the configured `api_host` (so the bearer token is never sent elsewhere), rejects `.`/`..` path segments, and percent-encodes each relative path segment (including `?`, `#` and `%`) so tool arguments cannot alter the request path or query. Relative paths must no longer embed query strings or pre-encoded characters.
+- Tool errors from upstream HTTP failures now contain only the status and a short, redacted `detail`/`message`/`error` string from a JSON body, instead of the full response body.
+- **Breaking:** the proxy MCP server only sends credentials to https URLs on `kfinance.kensho.com` / `kensho.okta.com`. `BACKEND_URL`, `AUTH_OKTA_HOST` and `AUTH_REFRESH_URL` pointing anywhere else fail at startup unless `DANGEROUSLY_ALLOW_UNTRUSTED_UPSTREAM_URLS=true`.
+- The local MCP server accepts `--host` and `--port` for HTTP transports (defaults unchanged: `127.0.0.1:8000`).
+- The proxy MCP app is now a plain Starlette app instead of FastAPI (`fastapi` was never a declared dependency). Fix its run command in the docs: `python -m kfinance.integrations.proxy_mcp.proxy_mcp`.
+
 ## v8.0.2
 - Reject non-string `line_item` values in `get_financial_line_item_from_identifiers` before they reach `.lower()`. A list now returns a clear "one line item per call" validation error instead of an `AttributeError` crash (KFINANCE-MCP-5D).
 

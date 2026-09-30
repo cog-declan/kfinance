@@ -65,19 +65,25 @@ python -m kfinance.mcp --refresh-token <token>
 python -m kfinance.mcp --streamable-http --refresh-token <token>
 ```
 
+HTTP transports (`--sse`, `--streamable-http`) bind to `127.0.0.1:8000` by default (configurable with `--host` and `--port`). Every tool call runs with your kfinance credentials, so the server protects its HTTP endpoint:
+
+- Inbound auth: set `KFINANCE_MCP_AUTH_TOKEN` (or `--auth-token`) to a secret of at least 32 characters, e.g. from `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Clients must then send `Authorization: Bearer <token>`. Prefer the environment variable so the token stays out of process listings.
+- The server refuses to bind to a non-loopback host (e.g. `0.0.0.0`) without inbound auth unless you pass `--dangerously-allow-unauthenticated-network-access`.
+- Requests with a `Host` header other than loopback or the bind address, and browser requests from other origins, are rejected. Allow additional values with `--allowed-host` and `--allowed-origin` (both repeatable).
+
 ## MCP Proxy
 
 The kFinance MCP proxy is a skeleton server that forwards requests to a remote kfinance MCP backend, injecting authentication tokens into every outgoing request. It is intended as a starting point for building a full production MCP proxy service.
 
 ```bash
 # Using a refresh token (for experimentation)
-AUTH_REFRESH_TOKEN=<token> python -m kfinance.proxy_mcp
+AUTH_REFRESH_TOKEN=<token> python -m kfinance.integrations.proxy_mcp.proxy_mcp
 
 # Using a key pair (for production)
-AUTH_CLIENT_ID=<client-id> AUTH_PRIVATE_KEY=<private-key> python -m kfinance.proxy_mcp
+AUTH_CLIENT_ID=<client-id> AUTH_PRIVATE_KEY=<private-key> python -m kfinance.integrations.proxy_mcp.proxy_mcp
 ```
 
-The server starts on `http://127.0.0.1:8000/mcp` by default. Use `--host` and `--port` to configure binding.
+The server starts on `http://127.0.0.1:8000/mcp` by default. Use `--host` and `--port` to configure binding. Binding to a non-loopback host requires `INBOUND_AUTH_TOKEN`; see the [proxy README](kfinance/integrations/proxy_mcp/README.md).
 
 For full documentation including configuration options, authentication methods, and production considerations, see [kfinance/integrations/proxy_mcp/README.md](kfinance/integrations/proxy_mcp/README.md).
 
