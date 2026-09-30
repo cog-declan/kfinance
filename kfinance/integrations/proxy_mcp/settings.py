@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +15,12 @@ class Settings(BaseSettings):
 
     backend_url: str = "https://kfinance.kensho.com/integrations/mcp"
     auth: AuthSettings = AuthSettings()
+    # Pre-shared token MCP clients must send as `Authorization: Bearer <token>`.
+    inbound_auth_token: SecretStr | None = None
+    # Extra Host header values to accept on /mcp (loopback and the bind address always are).
+    allowed_hosts: list[str] = []
+    # Browser origins allowed by CORS and by the /mcp Origin check.
+    cors_allowed_origins: list[str] = []
 
 
 settings = Settings()

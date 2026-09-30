@@ -8,6 +8,7 @@ from pydantic import BaseModel, ValidationError
 import pytest
 
 from kfinance.client.kfinance import Client
+from kfinance.client.permission_models import Permission
 from kfinance.conftest import SPGI_COMPANY_ID, SPGI_ID_TRIPLE, SPGI_TICKER
 from kfinance.domains.business_relationships.business_relationship_models import (
     BusinessRelationshipType,
@@ -251,3 +252,46 @@ class TestToolResp:
             identifier_results=identifier_results, identifier_info=identifier_info
         )
         assert expected_results == tool_resp.results
+
+
+class TestEnsurePermitted:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "entry_point",
+        ["arun_without_langchain", "run_without_langchain", "run_with_endpoint_tracking"],
+    )
+    async def test_tool_invocation_without_permission_raises(
+        self, mock_client: Client, httpx2_mock, entry_point: str
+    ) -> None:
+        """
+        GIVEN a user without the permission a tool requires
+        WHEN the tool gets invoked through a non-langchain entry point
+        THEN a PermissionError is raised before any request to the kfinance API.
+        """
+        mock_client.kfinance_api_client._user_permissions = set()  # noqa: SLF001
+        tool = GetBusinessRelationshipFromIdentifiers(kfinance_client=mock_client)
+        kwargs = {
+            "identifiers": ["SPGI"],
+            "business_relationship": BusinessRelationshipType.supplier,
+        }
+        with pytest.raises(PermissionError):
+            result = getattr(tool, entry_point)(**kwargs)
+            if asyncio.iscoroutine(result):
+                await result
+        assert not any(route.called for route in httpx2_mock.routes)
+
+    @pytest.mark.asyncio
+    async def test_tool_invocation_with_permission(
+        self, mock_client: Client, add_spgi_supplier_mock_resp
+    ) -> None:
+        """
+        GIVEN a user with the permission a tool requires
+        WHEN the tool gets invoked via MCP's entry point
+        THEN the tool runs.
+        """
+        mock_client.kfinance_api_client._user_permissions = {Permission.RelationshipPermission}  # noqa: SLF001
+        tool = GetBusinessRelationshipFromIdentifiers(kfinance_client=mock_client)
+        resp = await tool.arun_without_langchain(
+            identifiers=["SPGI"], business_relationship="supplier"
+        )
+        assert "SPGI" in resp["results"]

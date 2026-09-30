@@ -1,11 +1,20 @@
 import click
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from fastmcp import Client
 from fastmcp.server.providers.proxy import FastMCPProxy, ProxyClient
 from fastmcp.utilities.logging import get_logger
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
 import uvicorn
 
+from kfinance.integrations.mcp_server_security import (
+    ALLOW_UNAUTHENTICATED_NETWORK_ACCESS_FLAG,
+    build_inbound_auth,
+    check_network_exposure,
+)
 from kfinance.integrations.proxy_mcp.auth import (
     Cache,
     ClientAccessToken,
@@ -57,37 +66,67 @@ def build_proxy() -> FastMCPProxy:
     def client_factory() -> Client:
         return base_client.new()
 
-    return FastMCPProxy(client_factory=client_factory, name="Kfinance Proxy")
-
-
-def create_app() -> FastAPI:
-    """Create the FastAPI application wrapping the MCP proxy."""
-    proxy = build_proxy()
-    mcp_http_app = proxy.http_app(path="/mcp", transport="streamable-http")
-
-    app = FastAPI(lifespan=mcp_http_app.lifespan)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+    inbound_token = settings.inbound_auth_token
+    return FastMCPProxy(
+        client_factory=client_factory,
+        name="Kfinance Proxy",
+        auth=build_inbound_auth(inbound_token.get_secret_value() if inbound_token else None),
     )
 
-    @app.get("/health")
-    async def health() -> dict:
-        return {"status": "healthy"}
 
-    app.mount("/", mcp_http_app)
+async def health(request: Request) -> JSONResponse:
+    """Health check stub. Does not verify backend connectivity or token validity."""
+    return JSONResponse({"status": "healthy"})
 
-    return app
+
+def create_app() -> Starlette:
+    """Create the ASGI application wrapping the MCP proxy.
+
+    /mcp requires the inbound bearer token (if configured) and validates Host and Origin
+    headers. CORS only allows the configured origins.
+    """
+    proxy = build_proxy()
+    mcp_http_app = proxy.http_app(
+        path="/mcp",
+        transport="streamable-http",
+        host_origin_protection=True,
+        allowed_hosts=settings.allowed_hosts,
+        allowed_origins=settings.cors_allowed_origins,
+    )
+
+    return Starlette(
+        routes=[Route("/health", health, methods=["GET"]), Mount("/", app=mcp_http_app)],
+        middleware=[
+            Middleware(
+                CORSMiddleware,
+                allow_origins=settings.cors_allowed_origins,
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+        ],
+        lifespan=mcp_http_app.lifespan,
+    )
 
 
 @click.command()
 @click.option("--host", default="127.0.0.1", help="Host to bind to")
 @click.option("--port", default=8000, type=int, help="Port to bind to")
-def run_proxy_mcp(host: str, port: int) -> None:
+@click.option(
+    ALLOW_UNAUTHENTICATED_NETWORK_ACCESS_FLAG,
+    "allow_unauthenticated_network_access",
+    is_flag=True,
+    default=False,
+    help="Allow binding to a non-loopback host without INBOUND_AUTH_TOKEN. Anyone who can "
+    "reach the proxy can then act with its kfinance credentials.",
+)
+def run_proxy_mcp(host: str, port: int, allow_unauthenticated_network_access: bool) -> None:
     """Run the proxy MCP server."""
+    check_network_exposure(
+        host=host,
+        auth_enabled=settings.inbound_auth_token is not None,
+        allow_unauthenticated_network_access=allow_unauthenticated_network_access,
+    )
     app = create_app()
 
     logger.info("Proxy server starting on %s:%s", host, port)
