@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from queue import Queue
 from typing import Any, Generator
+from urllib.parse import quote, urlsplit
 
 import httpx2
 
@@ -11,6 +12,10 @@ from kfinance.client.fetch import KFinanceApiClient
 
 
 # Context variable for tracking endpoint URLs across async contexts
+# RFC 3986 pchar minus "%", so tool-derived values cannot smuggle pre-encoded
+# separators or dot segments into the request path.
+_SAFE_PATH_SEGMENT_CHARS = "-._~!$&'()*+,;=:@"
+
 _endpoint_tracker_queue: ContextVar[Queue[str] | None] = ContextVar(
     "endpoint_tracker_queue", default=None
 )
@@ -76,11 +81,27 @@ class KfinanceHttpxClient(httpx2.AsyncClient):
             pass  # Process is shutting down
 
     def _build_url(self, url: str) -> str:
-        """Build the full URL by prepending base_url to relative URLs."""
-        # If URL is already absolute (has scheme), return as-is
-        if url.startswith(("http://", "https://")):
+        """Build the full URL by prepending base_url to relative URLs.
+
+        Absolute URLs must point at the configured kfinance host. Each segment of a
+        relative path is percent-encoded and dot segments are rejected so that
+        tool-derived values cannot change the host, path, or query of the request.
+        """
+        parsed = urlsplit(url)
+        if parsed.scheme or parsed.netloc:
+            base = urlsplit(self._kfinance_base_url)
+            if (
+                parsed.scheme.lower() != base.scheme.lower()
+                or parsed.hostname != base.hostname
+                or parsed.port != base.port
+            ):
+                raise ValueError("Refusing to send a request outside the configured kfinance host.")
             return url
-        return f"{self._kfinance_base_url}/{url.lstrip('/')}"
+        segments = url.lstrip("/").split("/")
+        if any(segment in (".", "..") for segment in segments):
+            raise ValueError("Dot segments are not allowed in kfinance request paths.")
+        path = "/".join(quote(segment, safe=_SAFE_PATH_SEGMENT_CHARS) for segment in segments)
+        return f"{self._kfinance_base_url}/{path}"
 
     async def request(self, method: str, url: str, **kwargs: Any) -> httpx2.Response:  # type: ignore[override]
         """Override request to prepend base_url to relative URLs and track endpoints."""

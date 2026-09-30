@@ -27,6 +27,7 @@ All configuration is via environment variables (powered by pydantic-settings).
 | `AUTH_REFRESH_URL` | No | `https://kfinance.kensho.com/oauth2/refresh` | Token refresh endpoint |
 | `INBOUND_AUTH_TOKEN` | Yes** | — | Pre-shared token MCP clients must send as `Authorization: Bearer <token>` (at least 32 characters) |
 | `ALLOWED_HOSTS` | No | `[]` | JSON list of extra `Host` header values accepted on `/mcp` (e.g. `'["mcp.internal.example"]'`). Loopback hosts and the bind address are always accepted; `fnmatch` wildcards are supported |
+| `DANGEROUSLY_ALLOW_UNTRUSTED_UPSTREAM_URLS` | No | `false` | By default `BACKEND_URL`, `AUTH_OKTA_HOST` and `AUTH_REFRESH_URL` must be https URLs on `kfinance.kensho.com` or `kensho.okta.com`. Set to `true` to use other hosts; credentials are sent to them |
 | `CORS_ALLOWED_ORIGINS` | No | `[]` | JSON list of browser origins allowed by CORS and by the `/mcp` `Origin` check (e.g. `'["https://app.example"]'`) |
 
 *Either both `AUTH_CLIENT_ID` and `AUTH_PRIVATE_KEY`, or `AUTH_REFRESH_TOKEN` must be set.

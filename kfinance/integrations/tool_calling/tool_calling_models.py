@@ -1,5 +1,6 @@
 import abc
 import json
+import re
 from typing import Annotated, Any, Callable, Coroutine, Dict, Generic, Literal, Type, TypeVar
 
 from asyncer import syncify
@@ -21,9 +22,38 @@ from kfinance.domains.companies.company_models import IdentificationTripleWithCo
 from kfinance.httpx_utils import KfinanceHttpxClient
 
 
+_MAX_ERROR_DETAIL_LENGTH = 300
+_ERROR_DETAIL_KEYS = ("detail", "message", "error")
+_CREDENTIAL_PATTERN = re.compile(
+    r"(?i)\bbearer\s+\S+"  # bearer tokens
+    r"|\beyJ[\w-]+\.[\w-]+\.[\w-]*"  # JWTs
+)
+
+
 def _sanitize_http_error(e: HTTPStatusError) -> str:
-    """Return the response body from an HTTPStatusError."""
-    return f"{e.response.status_code}: {e.response.text}"
+    """Return a short, credential-free description of an HTTPStatusError.
+
+    Only a string `detail`/`message`/`error` field from a JSON body is kept. It is
+    stripped of control characters, has credential-like substrings redacted, and is
+    truncated. Other bodies (HTML error pages, stack traces, etc.) are dropped.
+    """
+    status = f"{e.response.status_code} {e.response.reason_phrase}".strip()
+    try:
+        body = e.response.json()
+    except ValueError:
+        return status
+    detail = None
+    if isinstance(body, dict):
+        detail = next(
+            (body[key] for key in _ERROR_DETAIL_KEYS if isinstance(body.get(key), str)), None
+        )
+    if not detail:
+        return status
+    detail = "".join(ch if ch.isprintable() else " " for ch in detail)
+    detail = _CREDENTIAL_PATTERN.sub("[REDACTED]", detail)
+    if len(detail) > _MAX_ERROR_DETAIL_LENGTH:
+        detail = detail[:_MAX_ERROR_DETAIL_LENGTH] + "..."
+    return f"{status}: {detail}"
 
 
 class KfinanceTool(BaseTool):

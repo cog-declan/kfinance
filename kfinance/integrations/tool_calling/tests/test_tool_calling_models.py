@@ -4,8 +4,10 @@ from contextlib import nullcontext as does_not_raise
 from datetime import datetime
 from typing import Any
 
+import httpx2
 from pydantic import BaseModel, ValidationError
 import pytest
+from respx import Router
 
 from kfinance.client.kfinance import Client
 from kfinance.client.permission_models import Permission
@@ -30,6 +32,7 @@ from kfinance.integrations.tool_calling.tool_calling_models import (
     ToolArgsWithIdentifiers,
     ToolRespWithIdInfoAndErrors,
     ValidQuarter,
+    _sanitize_http_error,
 )
 
 
@@ -295,3 +298,56 @@ class TestEnsurePermitted:
             identifiers=["SPGI"], business_relationship="supplier"
         )
         assert "SPGI" in resp["results"]
+
+
+class TestSanitizeHttpError:
+    @staticmethod
+    def _error(status_code: int, **kwargs: Any) -> httpx2.HTTPStatusError:
+        request = httpx2.Request("GET", "https://kfinance.kensho.com/api/v1/info/1")
+        response = httpx2.Response(status_code, request=request, **kwargs)
+        return httpx2.HTTPStatusError("error", request=request, response=response)
+
+    def test_non_json_body_is_dropped(self) -> None:
+        err = self._error(500, text="<html>Traceback: secret internal details</html>")
+        assert _sanitize_http_error(err) == "500 Internal Server Error"
+
+    def test_json_detail_is_kept(self) -> None:
+        err = self._error(400, json={"detail": "Invalid company id", "trace": "internal"})
+        assert _sanitize_http_error(err) == "400 Bad Request: Invalid company id"
+
+    def test_credentials_are_redacted(self) -> None:
+        dummy_jwt = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJkdW1teSJ9.c2ln"
+        err = self._error(
+            401, json={"detail": f"Bad header Bearer dummy-token-123 and token {dummy_jwt}"}
+        )
+        sanitized = _sanitize_http_error(err)
+        assert "dummy-token-123" not in sanitized
+        assert dummy_jwt not in sanitized
+        assert sanitized.count("[REDACTED]") == 2
+
+    def test_detail_is_truncated_and_control_chars_removed(self) -> None:
+        err = self._error(400, json={"detail": "line1\nline2\x1b[31m" + "x" * 1000})
+        sanitized = _sanitize_http_error(err)
+        assert "\n" not in sanitized
+        assert "\x1b" not in sanitized
+        assert len(sanitized) < 400
+
+    @pytest.mark.asyncio
+    async def test_tool_error_does_not_leak_upstream_body(
+        self, mock_client: Client, httpx2_mock: Router
+    ) -> None:
+        mock_client.kfinance_api_client._user_permissions = {  # noqa: SLF001
+            Permission.RelationshipPermission
+        }
+        httpx2_mock.post("https://kfinance.kensho.com/api/v1/ids").respond(
+            json={"data": {SPGI_TICKER: SPGI_ID_TRIPLE.model_dump(mode="json")}}
+        )
+        httpx2_mock.get(
+            f"https://kfinance.kensho.com/api/v1/relationship/{SPGI_COMPANY_ID}/supplier"
+        ).respond(status_code=500, text="internal stack trace with Bearer foo")
+        tool = GetBusinessRelationshipFromIdentifiers(kfinance_client=mock_client)
+        with pytest.raises(Exception) as exc_info:
+            await tool.arun_without_langchain(
+                identifiers=[SPGI_TICKER], business_relationship=BusinessRelationshipType.supplier
+            )
+        assert str(exc_info.value) == "500 Internal Server Error"

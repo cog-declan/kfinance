@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 import httpx2
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 import pytest
 from respx import Router
 
@@ -67,6 +67,31 @@ class TestSettings:
         assert DUMMY_TOKEN not in repr(env_settings)
         assert env_settings.cors_allowed_origins == [ALLOWED_ORIGIN]
         assert env_settings.allowed_hosts == ["mcp.example"]
+
+    @pytest.mark.parametrize(
+        "field, url",
+        [
+            ("backend_url", "https://evil.example/integrations/mcp"),
+            ("backend_url", "http://kfinance.kensho.com/integrations/mcp"),
+            ("backend_url", "https://user:pw@kfinance.kensho.com/integrations/mcp"),
+            ("okta_host", "https://kensho.okta.com.evil.example"),
+            ("refresh_url", "http://kfinance.kensho.com/oauth2/refresh"),
+        ],
+    )
+    def test_untrusted_upstream_url_is_rejected(self, field: str, url: str) -> None:
+        kwargs: dict[str, object] = (
+            {"backend_url": url} if field == "backend_url" else {"auth": {field: url}}
+        )
+        with pytest.raises(ValidationError, match="DANGEROUSLY_ALLOW_UNTRUSTED_UPSTREAM_URLS"):
+            Settings(**kwargs)  # type: ignore[arg-type]
+
+    def test_untrusted_upstream_url_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("BACKEND_URL", "http://localhost:9000/mcp")
+        monkeypatch.setenv("AUTH_REFRESH_URL", "https://auth.example/refresh")
+        monkeypatch.setenv("DANGEROUSLY_ALLOW_UNTRUSTED_UPSTREAM_URLS", "true")
+        env_settings = Settings()
+        assert env_settings.backend_url == "http://localhost:9000/mcp"
+        assert env_settings.auth.refresh_url == "https://auth.example/refresh"
 
 
 @pytest.mark.usefixtures("proxy_settings")
