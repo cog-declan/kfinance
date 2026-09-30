@@ -1,5 +1,14 @@
 # Changelog
 
+## v8.0.3
+- Harden the proxy MCP server (`kfinance.integrations.proxy_mcp`):
+  - Validate `Host` and `Origin` headers on every request to block DNS rebinding; requests with an unknown `Host` get `421`, untrusted browser origins get `403`. Add extra hostnames with `ALLOWED_HOSTS`.
+  - Replace wildcard credentialed CORS (`allow_origins=["*"]` + `allow_credentials=True`) with an explicit `CORS_ALLOWED_ORIGINS` allowlist that defaults to empty and never allows credentials.
+  - Add optional inbound auth: when `PROXY_API_KEY` is set, clients must send `Authorization: Bearer <key>`.
+  - **Breaking:** refuse to start on a non-loopback `--host` without `PROXY_API_KEY`, unless `--insecure-allow-unauthenticated-non-loopback` is passed.
+  - `create_app` now returns a Starlette app built by FastMCP instead of a FastAPI app (FastAPI was never a declared dependency).
+  - Fix the run command in the proxy README.
+
 ## v8.0.2
 - Reject non-string `line_item` values in `get_financial_line_item_from_identifiers` before they reach `.lower()`. A list now returns a clear "one line item per call" validation error instead of an `AttributeError` crash (KFINANCE-MCP-5D).
 
